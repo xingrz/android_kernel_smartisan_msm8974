@@ -2274,7 +2274,7 @@ static struct file *atomic_open(struct nameidata *nd, struct dentry *dentry,
 	umode_t mode;
 	int error;
 	int acc_mode;
-	struct file *filp;
+	struct file *filp = NULL;
 	int create_error = 0;
 	struct dentry *const DENTRY_NOT_SET = (void *) -1UL;
 
@@ -2341,14 +2341,15 @@ static struct file *atomic_open(struct nameidata *nd, struct dentry *dentry,
 
 	od->dentry = DENTRY_NOT_SET;
 	od->mnt = nd->path.mnt;
-	filp = dir->i_op->atomic_open(dir, dentry, od, open_flag, mode,
+	error = dir->i_op->atomic_open(dir, dentry, od, open_flag, mode,
 				      opened);
-	if (IS_ERR(filp)) {
+	if (error < 0) {
 		if (WARN_ON(od->dentry != DENTRY_NOT_SET))
 			dput(od->dentry);
 
-		if (create_error && PTR_ERR(filp) == -ENOENT)
-			filp = ERR_PTR(create_error);
+		if (create_error && error == -ENOENT)
+			error = create_error;
+		filp = ERR_PTR(error);
 		goto out;
 	}
 
@@ -2358,7 +2359,7 @@ static struct file *atomic_open(struct nameidata *nd, struct dentry *dentry,
 		acc_mode = MAY_OPEN;
 	}
 
-	if (!filp) {
+	if (error) {	/* returned 1, that is */
 		if (WARN_ON(od->dentry == DENTRY_NOT_SET)) {
 			filp = ERR_PTR(-EIO);
 			goto out;
@@ -2374,6 +2375,7 @@ static struct file *atomic_open(struct nameidata *nd, struct dentry *dentry,
 	 * We didn't have the inode before the open, so check open permission
 	 * here.
 	 */
+	filp = od->filp;
 	error = may_open(&filp->f_path, acc_mode, open_flag);
 	if (error) {
 		fput(filp);
