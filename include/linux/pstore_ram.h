@@ -66,6 +66,8 @@ void *persistent_ram_old(struct persistent_ram_zone *prz);
 void persistent_ram_free_old(struct persistent_ram_zone *prz);
 ssize_t persistent_ram_ecc_string(struct persistent_ram_zone *prz,
 	char *str, size_t len);
+void *persistent_ram_map(phys_addr_t start, phys_addr_t size);
+void persistent_ram_unmap(void *vaddr, phys_addr_t start, phys_addr_t size);
 
 /*
  * Ramoops platform data
