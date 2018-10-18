@@ -65,3 +65,9 @@ obj-$(CONFIG_QPNP_CHARGER)	+= qpnp-charger.o
 obj-$(CONFIG_LTC4088_CHARGER)	+= ltc4088-charger.o
 obj-$(CONFIG_CHARGER_SMB347)	+= smb347-charger.o
 obj-$(CONFIG_BATTERY_BCL)	+= battery_current_limit.o
+
+ifdef CONFIG_VENDOR_SMARTISAN
+obj-$(CONFIG_BATTERY_SWITCH) += battery_switch.o
+obj-$(CONFIG_BATTERY_STATE_MACHINE) += battery_state_machine.o battery_boot_enter.o battery_mainbat_charging.o battery_mainbat_nocharging.o battery_backbat_charging.o battery_backbat_nocharging.o
+obj-$(CONFIG_BATTERY_STC3115)	+= stc3115_battery.o
+endif
