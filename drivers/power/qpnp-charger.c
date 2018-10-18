@@ -1704,7 +1704,11 @@ qpnp_chg_regulator_batfet_set(struct qpnp_chg_chip *chip, bool enable)
 	return rc;
 }
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+#define USB_WALL_THRESHOLD_MA	1500
+#else
 #define USB_WALL_THRESHOLD_MA	500
+#endif
 #define ENUM_T_STOP_BIT		BIT(0)
 #define USB_5V_UV	5000000
 #define USB_9V_UV	9000000
@@ -3735,7 +3739,11 @@ qpnp_chg_adjust_vddmax(struct qpnp_chg_chip *chip, int vbat_mv)
 	qpnp_chg_set_appropriate_vddmax(chip);
 }
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+#define CONSECUTIVE_COUNT	5
+#else
 #define CONSECUTIVE_COUNT	3
+#endif
 #define VBATDET_MAX_ERR_MV	50
 static void
 qpnp_eoc_work(struct work_struct *work)
