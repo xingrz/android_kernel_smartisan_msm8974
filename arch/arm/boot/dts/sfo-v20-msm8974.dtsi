@@ -133,44 +133,49 @@
 		compatible = "gpio-keys";
 		input-name = "gpio-keys";
 
-		vol_dn_l {
-			label = "volume_down_left";
+		/* Left up */
+		left_up {
+			label = "left_up";
+			gpios = <&pm8941_gpios 5 0x1>;
+			linux,input-type = <1>;
+			linux,code = <225>;
+			gpio-key,wakeup;
+			debounce-interval = <15>;
+		};
+
+		/* Left down */
+		left_down {
+			label = "left_down";
 			gpios = <&pm8941_gpios 2 0x1>;
 			linux,input-type = <1>;
-			linux,code = <114>;
+			linux,code = <224>;
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
 
-		vol_dn_r {
-			label = "volume_down_right";
-			gpios = <&pm8941_gpios 3 0x1>;
-			linux,input-type = <1>;
-			linux,code = <0x2>;  /* temporary value (KEY_1) */
-			gpio-key,wakeup;
-			debounce-interval = <15>;
-		};
-
-		vol_up_r {
-			label = "volume_up_right";
+		/* Right up */
+		right_up {
+			label = "right_up";
 			gpios = <&pm8941_gpios 4 0x1>;
-			linux,input-type = <1>;
-			linux,code = <0x3>;  /* temporary value (KEY_2) */
-			gpio-key,wakeup;
-			debounce-interval = <15>;
-		};
-
-		vol_up_l {
-			label = "volume_up_left";
-			gpios = <&pm8941_gpios 5 0x1>;
 			linux,input-type = <1>;
 			linux,code = <115>;
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
 
-		key_back {
-			label = "key_back";
+		/* Right down */
+		right_down {
+			label = "right_down";
+			gpios = <&pm8941_gpios 3 0x1>;
+			linux,input-type = <1>;
+			linux,code = <114>;
+			gpio-key,wakeup;
+			debounce-interval = <15>;
+		};
+
+		/* Nav left */
+		nav_left {
+			label = "nav_left";
 			gpios = <&pm8941_gpios 6 0x1>;
 			linux,input-type = <1>;
 			linux,code = <158>;
@@ -178,11 +183,12 @@
 			debounce-interval = <15>;
 		};
 
-		key_menu {
-			label = "key_menu";
+		/* Nav right */
+		nav_right {
+			label = "nav_right";
 			gpios = <&pm8941_gpios 7 0x1>;
 			linux,input-type = <1>;
-			linux,code = <139>;
+			linux,code = <580>;
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
