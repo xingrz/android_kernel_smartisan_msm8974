@@ -23,6 +23,7 @@
 #include <linux/input.h>
 #include <linux/log2.h>
 #include <linux/qpnp/power-on.h>
+#include <linux/input/keypad.h>
 
 #define PMIC_VER_8941           0x01
 #define PMIC_VERSION_REG        0x0105
@@ -181,6 +182,49 @@ static const char * const qpnp_poff_reason[] = {
 	[14] = "Triggered from OTST3 (Overtemp)",
 	[15] = "Triggered from STAGE3 (Stage 3 reset)",
 };
+
+static int qpnp_pon_keypad_read(u32 *code, void *data)
+{
+	struct qpnp_pon_config *cfg = (struct qpnp_pon_config *) data;
+
+	if (!cfg) {
+		return -ENODEV;
+	}
+
+	*code = cfg->key_code;
+
+	return 0;
+}
+
+static int qpnp_pon_keypad_write(u32 code, void *data)
+{
+	struct qpnp_pon *pon = sys_reset_dev;
+	struct qpnp_pon_config *cfg = (struct qpnp_pon_config *) data;
+
+	if (!cfg) {
+		return -ENODEV;
+	}
+
+	if (code) {
+		input_set_capability(pon->pon_input, EV_KEY, code);
+	}
+
+	if (!cfg->key_code && code) {
+		enable_irq_wake(cfg->state_irq);
+		if (cfg->pon_type == PON_RESIN && cfg->support_reset) {
+			enable_irq_wake(cfg->bark_irq);
+		}
+	} else if (cfg->key_code && !code) {
+		disable_irq_wake(cfg->state_irq);
+		if (cfg->pon_type == PON_RESIN && cfg->support_reset) {
+			disable_irq_wake(cfg->bark_irq);
+		}
+	}
+
+	cfg->key_code = code;
+
+	return 0;
+}
 
 static int
 qpnp_pon_masked_write(struct qpnp_pon *pon, u16 addr, u8 mask, u8 val)
@@ -792,6 +836,7 @@ static int __devinit qpnp_pon_config_init(struct qpnp_pon *pon)
 	int rc = 0, i = 0;
 	struct device_node *pp = NULL;
 	struct qpnp_pon_config *cfg;
+	const char *label;
 	u8 pon_ver;
 	u8 pmic_type;
 	u8 revid_rev4;
@@ -1040,6 +1085,13 @@ static int __devinit qpnp_pon_config_init(struct qpnp_pon *pon)
 			rc = qpnp_pon_config_input(pon, cfg);
 			if (rc < 0)
 				return rc;
+
+			label = of_get_property(pp, "label", NULL);
+			if (label) {
+				keypad_register(label, cfg,
+					qpnp_pon_keypad_read,
+					qpnp_pon_keypad_write);
+			}
 		}
 		/* get the pull-up configuration */
 		rc = of_property_read_u32(pp, "qcom,pull-up", &cfg->pull_up);
