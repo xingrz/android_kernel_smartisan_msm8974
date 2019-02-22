@@ -368,7 +368,7 @@ struct qpnp_chg_chip {
 	struct power_supply		dc_psy;
 	struct power_supply		*usb_psy;
 	struct power_supply		*bms_psy;
-	struct power_supply		batt_psy;
+	struct power_supply		main_batt_psy;
 	uint32_t			flags;
 	struct qpnp_adc_tm_btm_param	adc_param;
 	struct work_struct		adc_measure_work;
@@ -458,7 +458,7 @@ static int ext_ovp_isns_read(char *buffer, const struct kernel_param *kp)
 	struct qpnp_vadc_result results;
 	struct power_supply *batt_psy = power_supply_get_by_name("battery");
 	struct qpnp_chg_chip *chip = container_of(batt_psy,
-				struct qpnp_chg_chip, batt_psy);
+				struct qpnp_chg_chip, main_batt_psy);
 
 	if (!ext_ovp_isns_present)
 		return 0;
@@ -483,7 +483,7 @@ static int ext_ovp_isns_enable(const char *val, const struct kernel_param *kp)
 	int rc;
 	struct power_supply *batt_psy = power_supply_get_by_name("battery");
 	struct qpnp_chg_chip *chip = container_of(batt_psy,
-				struct qpnp_chg_chip, batt_psy);
+				struct qpnp_chg_chip, main_batt_psy);
 
 	rc = param_set_bool(val, kp);
 	if (rc) {
@@ -2157,7 +2157,7 @@ qpnp_dc_property_is_writeable(struct power_supply *psy,
 }
 
 static int
-qpnp_batt_property_is_writeable(struct power_supply *psy,
+qpnp_main_batt_property_is_writeable(struct power_supply *psy,
 						enum power_supply_property psp)
 {
 	switch (psp) {
@@ -2316,7 +2316,7 @@ static enum power_supply_property pm_power_props_mains[] = {
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 };
 
-static enum power_supply_property msm_batt_power_props[] = {
+static enum power_supply_property msm_main_batt_power_props[] = {
 	POWER_SUPPLY_PROP_CHARGING_ENABLED,
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
@@ -2349,7 +2349,7 @@ static char *pm_power_supplied_to[] = {
 	"battery",
 };
 
-static char *pm_batt_supplied_to[] = {
+static char *pm_main_batt_supplied_to[] = {
 	"bms",
 };
 
@@ -2409,7 +2409,7 @@ qpnp_aicl_check_work(struct work_struct *work)
 }
 
 static int
-get_prop_battery_voltage_now(struct qpnp_chg_chip *chip)
+get_prop_main_battery_voltage_now(struct qpnp_chg_chip *chip)
 {
 	int rc = 0;
 	struct qpnp_vadc_result results;
@@ -2420,7 +2420,7 @@ get_prop_battery_voltage_now(struct qpnp_chg_chip *chip)
 	} else {
 		rc = qpnp_vadc_read(chip->vadc_dev, VBAT_SNS, &results);
 		if (rc) {
-			pr_err("Unable to read vbat rc=%d\n", rc);
+			pr_err("Unable to read main vbat rc=%d\n", rc);
 			return 0;
 		}
 		return results.physical;
@@ -2429,7 +2429,7 @@ get_prop_battery_voltage_now(struct qpnp_chg_chip *chip)
 
 #define BATT_PRES_BIT BIT(7)
 static int
-get_prop_batt_present(struct qpnp_chg_chip *chip)
+get_prop_main_batt_present(struct qpnp_chg_chip *chip)
 {
 	u8 batt_present;
 	int rc;
@@ -2492,13 +2492,13 @@ get_prop_charge_type(struct qpnp_chg_chip *chip)
 
 #define DEFAULT_CAPACITY	50
 static int
-get_batt_capacity(struct qpnp_chg_chip *chip)
+get_main_batt_capacity(struct qpnp_chg_chip *chip)
 {
 	union power_supply_propval ret = {0,};
 
 	if (chip->fake_battery_soc >= 0)
 		return chip->fake_battery_soc;
-	if (chip->use_default_batt_values || !get_prop_batt_present(chip))
+	if (chip->use_default_batt_values || !get_prop_main_batt_present(chip))
 		return DEFAULT_CAPACITY;
 	if (chip->bms_psy) {
 		chip->bms_psy->get_property(chip->bms_psy,
@@ -2509,7 +2509,7 @@ get_batt_capacity(struct qpnp_chg_chip *chip)
 }
 
 static int
-get_prop_batt_status(struct qpnp_chg_chip *chip)
+get_prop_main_batt_status(struct qpnp_chg_chip *chip)
 {
 	int rc;
 	u8 chgr_sts, bat_if_sts;
@@ -2537,7 +2537,7 @@ get_prop_batt_status(struct qpnp_chg_chip *chip)
 	 */
 	if ((qpnp_chg_is_usb_chg_plugged_in(chip) ||
 		qpnp_chg_is_dc_chg_plugged_in(chip)) &&
-		(chip->chg_done || get_batt_capacity(chip) == 100)
+		(chip->chg_done || get_main_batt_capacity(chip) == 100)
 		&& qpnp_chg_is_boost_en_set(chip) == 0) {
 		return POWER_SUPPLY_STATUS_FULL;
 	}
@@ -2546,7 +2546,7 @@ get_prop_batt_status(struct qpnp_chg_chip *chip)
 }
 
 static int
-get_prop_current_now(struct qpnp_chg_chip *chip)
+get_prop_main_current_now(struct qpnp_chg_chip *chip)
 {
 	union power_supply_propval ret = {0,};
 
@@ -2562,7 +2562,7 @@ get_prop_current_now(struct qpnp_chg_chip *chip)
 }
 
 static int
-get_prop_full_design(struct qpnp_chg_chip *chip)
+get_prop_main_full_design(struct qpnp_chg_chip *chip)
 {
 	union power_supply_propval ret = {0,};
 
@@ -2578,7 +2578,7 @@ get_prop_full_design(struct qpnp_chg_chip *chip)
 }
 
 static int
-get_prop_charge_full(struct qpnp_chg_chip *chip)
+get_prop_main_charge_full(struct qpnp_chg_chip *chip)
 {
 	union power_supply_propval ret = {0,};
 
@@ -2594,7 +2594,7 @@ get_prop_charge_full(struct qpnp_chg_chip *chip)
 }
 
 static int
-get_prop_capacity(struct qpnp_chg_chip *chip)
+get_prop_main_capacity(struct qpnp_chg_chip *chip)
 {
 	union power_supply_propval ret = {0,};
 	int battery_status, bms_status, soc, charger_in;
@@ -2602,14 +2602,14 @@ get_prop_capacity(struct qpnp_chg_chip *chip)
 	if (chip->fake_battery_soc >= 0)
 		return chip->fake_battery_soc;
 
-	if (chip->use_default_batt_values || !get_prop_batt_present(chip))
+	if (chip->use_default_batt_values || !get_prop_main_batt_present(chip))
 		return DEFAULT_CAPACITY;
 
 	if (chip->bms_psy) {
 		chip->bms_psy->get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_CAPACITY, &ret);
 		soc = ret.intval;
-		battery_status = get_prop_batt_status(chip);
+		battery_status = get_prop_main_batt_status(chip);
 		chip->bms_psy->get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_STATUS, &ret);
 		bms_status = ret.intval;
@@ -2649,20 +2649,20 @@ get_prop_capacity(struct qpnp_chg_chip *chip)
 #define DEFAULT_TEMP		250
 #define MAX_TOLERABLE_BATT_TEMP_DDC	680
 static int
-get_prop_batt_temp(struct qpnp_chg_chip *chip)
+get_prop_main_batt_temp(struct qpnp_chg_chip *chip)
 {
 	int rc = 0;
 	struct qpnp_vadc_result results;
 
-	if (chip->use_default_batt_values || !get_prop_batt_present(chip))
+	if (chip->use_default_batt_values || !get_prop_main_batt_present(chip))
 		return DEFAULT_TEMP;
 
 	rc = qpnp_vadc_read(chip->vadc_dev, LR_MUX1_BATT_THERM, &results);
 	if (rc) {
-		pr_debug("Unable to read batt temperature rc=%d\n", rc);
+		pr_debug("Unable to read main batt temperature rc=%d\n", rc);
 		return 0;
 	}
-	pr_debug("get_bat_temp %d, %lld\n",
+	pr_debug("get_main_bat_temp %d, %lld\n",
 		results.adc_code, results.physical);
 
 	return (int)results.physical;
@@ -2695,16 +2695,16 @@ static int get_prop_vchg_loop(struct qpnp_chg_chip *chip)
 	return (buck_sts & VCHG_LOOP_IRQ) ? 1 : 0;
 }
 
-static int get_prop_online(struct qpnp_chg_chip *chip)
+static int get_prop_main_online(struct qpnp_chg_chip *chip)
 {
 	return qpnp_chg_is_batfet_closed(chip);
 }
 
 static void
-qpnp_batt_external_power_changed(struct power_supply *psy)
+qpnp_main_batt_external_power_changed(struct power_supply *psy)
 {
 	struct qpnp_chg_chip *chip = container_of(psy, struct qpnp_chg_chip,
-								batt_psy);
+								main_batt_psy);
 	union power_supply_propval ret = {0,};
 
 	if (!chip->bms_psy)
@@ -2772,21 +2772,21 @@ qpnp_batt_external_power_changed(struct power_supply *psy)
 
 skip_set_iusb_max:
 	pr_debug("end of power supply changed\n");
-	pr_debug("psy changed batt_psy\n");
-	power_supply_changed(&chip->batt_psy);
+	pr_debug("psy changed main_batt_psy\n");
+	power_supply_changed(&chip->main_batt_psy);
 }
 
 static int
-qpnp_batt_power_get_property(struct power_supply *psy,
+qpnp_main_batt_power_get_property(struct power_supply *psy,
 				       enum power_supply_property psp,
 				       union power_supply_propval *val)
 {
 	struct qpnp_chg_chip *chip = container_of(psy, struct qpnp_chg_chip,
-								batt_psy);
+								main_batt_psy);
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		val->intval = get_prop_batt_status(chip);
+		val->intval = get_prop_main_batt_status(chip);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_TYPE:
 		val->intval = get_prop_charge_type(chip);
@@ -2795,7 +2795,7 @@ qpnp_batt_power_get_property(struct power_supply *psy,
 		val->intval = get_prop_batt_health(chip);
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
-		val->intval = get_prop_batt_present(chip);
+		val->intval = get_prop_main_batt_present(chip);
 		break;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
@@ -2807,13 +2807,13 @@ qpnp_batt_power_get_property(struct power_supply *psy,
 		val->intval = chip->min_voltage_mv * 1000;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-		val->intval = get_prop_battery_voltage_now(chip);
+		val->intval = get_prop_main_battery_voltage_now(chip);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_OCV:
 		val->intval = chip->insertion_ocv_uv;
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
-		val->intval = get_prop_batt_temp(chip);
+		val->intval = get_prop_main_batt_temp(chip);
 		break;
 	case POWER_SUPPLY_PROP_COOL_TEMP:
 		val->intval = chip->cool_bat_decidegc;
@@ -2822,16 +2822,16 @@ qpnp_batt_power_get_property(struct power_supply *psy,
 		val->intval = chip->warm_bat_decidegc;
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
-		val->intval = get_prop_capacity(chip);
+		val->intval = get_prop_main_capacity(chip);
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		val->intval = get_prop_current_now(chip);
+		val->intval = get_prop_main_current_now(chip);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
-		val->intval = get_prop_full_design(chip);
+		val->intval = get_prop_main_full_design(chip);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
-		val->intval = get_prop_charge_full(chip);
+		val->intval = get_prop_main_charge_full(chip);
 		break;
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		val->intval = !(chip->charging_disabled);
@@ -2858,7 +2858,7 @@ qpnp_batt_power_get_property(struct power_supply *psy,
 		val->intval = qpnp_chg_vinmin_get(chip) * 1000;
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
-		val->intval = get_prop_online(chip);
+		val->intval = get_prop_main_online(chip);
 		break;
 	case POWER_SUPPLY_PROP_VCHG_LOOP_DBC_BYPASS:
 		val->intval = qpnp_chg_vchg_loop_debouncer_setting_get(chip);
@@ -3435,8 +3435,8 @@ qpnp_chg_regulator_boost_enable(struct regulator_dev *rdev)
 	 * update battery status when charger is connected and state is full
 	 */
 	if (usb_present && (chip->chg_done
-			|| (get_batt_capacity(chip) == 100)
-			|| (get_prop_batt_status(chip) ==
+			|| (get_main_batt_capacity(chip) == 100)
+			|| (get_prop_main_batt_status(chip) ==
 			POWER_SUPPLY_STATUS_FULL)))
 		power_supply_changed(&chip->batt_psy);
 
@@ -3538,7 +3538,7 @@ qpnp_chg_regulator_boost_disable(struct regulator_dev *rdev)
 	 * resumeing charging else update battery status
 	 */
 	if (qpnp_chg_is_usb_chg_plugged_in(chip)) {
-		if (get_batt_capacity(chip) < 100 || !chip->chg_done) {
+		if (get_main_batt_capacity(chip) < 100 || !chip->chg_done) {
 			chip->chg_done = false;
 			chip->resuming_charging = true;
 			qpnp_chg_set_appropriate_vbatdet(chip);
@@ -4307,12 +4307,12 @@ qpnp_dc_power_set_property(struct power_supply *psy,
 }
 
 static int
-qpnp_batt_power_set_property(struct power_supply *psy,
+qpnp_main_batt_power_set_property(struct power_supply *psy,
 				  enum power_supply_property psp,
 				  const union power_supply_propval *val)
 {
 	struct qpnp_chg_chip *chip = container_of(psy, struct qpnp_chg_chip,
-								batt_psy);
+								main_batt_psy);
 	int rc = 0;
 
 	switch (psp) {
@@ -4368,8 +4368,8 @@ qpnp_batt_power_set_property(struct power_supply *psy,
 		return -EINVAL;
 	}
 
-	pr_debug("psy changed batt_psy\n");
-	power_supply_changed(&chip->batt_psy);
+	pr_debug("psy changed main_batt_psy\n");
+	power_supply_changed(&chip->main_batt_psy);
 	return rc;
 }
 
@@ -5463,24 +5463,24 @@ qpnp_charger_probe(struct spmi_device *spmi)
 	chip->insertion_ocv_uv = -EINVAL;
 	chip->batt_present = qpnp_chg_is_batt_present(chip);
 	if (chip->bat_if_base) {
-		chip->batt_psy.name = "battery";
-		chip->batt_psy.type = POWER_SUPPLY_TYPE_BATTERY;
-		chip->batt_psy.properties = msm_batt_power_props;
-		chip->batt_psy.num_properties =
-			ARRAY_SIZE(msm_batt_power_props);
-		chip->batt_psy.get_property = qpnp_batt_power_get_property;
-		chip->batt_psy.set_property = qpnp_batt_power_set_property;
-		chip->batt_psy.property_is_writeable =
-				qpnp_batt_property_is_writeable;
-		chip->batt_psy.external_power_changed =
-				qpnp_batt_external_power_changed;
-		chip->batt_psy.supplied_to = pm_batt_supplied_to;
-		chip->batt_psy.num_supplicants =
-				ARRAY_SIZE(pm_batt_supplied_to);
+		chip->main_batt_psy.name = "battery";
+		chip->main_batt_psy.type = POWER_SUPPLY_TYPE_BATTERY;
+		chip->main_batt_psy.properties = msm_main_batt_power_props;
+		chip->main_batt_psy.num_properties =
+			ARRAY_SIZE(msm_main_batt_power_props);
+		chip->main_batt_psy.get_property = qpnp_main_batt_power_get_property;
+		chip->main_batt_psy.set_property = qpnp_main_batt_power_set_property;
+		chip->main_batt_psy.property_is_writeable =
+				qpnp_main_batt_property_is_writeable;
+		chip->main_batt_psy.external_power_changed =
+				qpnp_main_batt_external_power_changed;
+		chip->main_batt_psy.supplied_to = pm_main_batt_supplied_to;
+		chip->main_batt_psy.num_supplicants =
+				ARRAY_SIZE(pm_main_batt_supplied_to);
 
-		rc = power_supply_register(chip->dev, &chip->batt_psy);
+		rc = power_supply_register(chip->dev, &chip->main_batt_psy);
 		if (rc < 0) {
-			pr_err("batt failed to register rc = %d\n", rc);
+			pr_err("main batt failed to register rc = %d\n", rc);
 			goto fail_chg_enable;
 		}
 		INIT_WORK(&chip->adc_measure_work,
@@ -5602,7 +5602,7 @@ unregister_dc_psy:
 		power_supply_unregister(&chip->dc_psy);
 unregister_batt:
 	if (chip->bat_if_base)
-		power_supply_unregister(&chip->batt_psy);
+		power_supply_unregister(&chip->main_batt_psy);
 fail_chg_enable:
 	regulator_unregister(chip->otg_vreg.rdev);
 	regulator_unregister(chip->boost_vreg.rdev);
@@ -5627,7 +5627,7 @@ qpnp_charger_remove(struct spmi_device *spmi)
 	cancel_delayed_work_sync(&chip->eoc_work);
 	cancel_work_sync(&chip->adc_disable_work);
 	cancel_work_sync(&chip->adc_measure_work);
-	power_supply_unregister(&chip->batt_psy);
+	power_supply_unregister(&chip->main_batt_psy);
 	cancel_work_sync(&chip->batfet_lcl_work);
 	cancel_work_sync(&chip->insertion_ocv_work);
 	cancel_work_sync(&chip->reduce_power_stage_work);
