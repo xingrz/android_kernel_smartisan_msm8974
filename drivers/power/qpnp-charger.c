@@ -35,6 +35,10 @@
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
 #include <linux/qpnp/pin.h>
+#ifdef CONFIG_VENDOR_SMARTISAN
+#include <mach/socinfo.h>
+#include <linux/power/battery_common.h>
+#endif
 
 /* Interrupt offsets */
 #define INT_RT_STS(base)			(base + 0x10)
@@ -369,6 +373,11 @@ struct qpnp_chg_chip {
 	struct power_supply		*usb_psy;
 	struct power_supply		*bms_psy;
 	struct power_supply		main_batt_psy;
+#ifdef CONFIG_VENDOR_SMARTISAN
+	struct power_supply		*stc3115_psy;
+	struct power_supply		backup_batt_psy;
+	struct power_supply		*batt_psy;
+#endif
 	uint32_t			flags;
 	struct qpnp_adc_tm_btm_param	adc_param;
 	struct work_struct		adc_measure_work;
@@ -401,6 +410,10 @@ struct qpnp_chg_chip {
 	unsigned int			ext_ovp_isns_gpio;
 	unsigned int			usb_trim_default;
 	u8				chg_temp_thresh_default;
+#ifdef CONFIG_VENDOR_SMARTISAN
+	struct notifier_block		parse_switch_blk;
+	unsigned int			current_batt;
+#endif
 };
 
 static void
@@ -442,6 +455,12 @@ enum usbin_health {
 	USBIN_OK,
 	USBIN_OVP,
 };
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+int current_used_batt = 1;
+static int last_usb_en = 0;
+static int last_dcin_en = 0;
+#endif
 
 static int ext_ovp_isns_present;
 module_param(ext_ovp_isns_present, int, 0444);
@@ -1354,6 +1373,13 @@ qpnp_bat_if_adc_measure_work(struct work_struct *work)
 	struct qpnp_chg_chip *chip = container_of(work,
 				struct qpnp_chg_chip, adc_measure_work);
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+	if (!chip->current_batt)
+		chip->adc_param.channel = LR_MUX5_PU1_AMUX_THM2;
+	else
+		chip->adc_param.channel = LR_MUX1_BATT_THERM;
+#endif
+
 	if (qpnp_adc_tm_channel_measure(chip->adc_tm_dev, &chip->adc_param))
 		pr_err("request ADC error\n");
 }
@@ -1363,6 +1389,13 @@ qpnp_bat_if_adc_disable_work(struct work_struct *work)
 {
 	struct qpnp_chg_chip *chip = container_of(work,
 				struct qpnp_chg_chip, adc_disable_work);
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+	if (!chip->current_batt)
+		chip->adc_param.channel = LR_MUX5_PU1_AMUX_THM2;
+	else
+		chip->adc_param.channel = LR_MUX1_BATT_THERM;
+#endif
 
 	qpnp_adc_tm_disable_chan_meas(chip->adc_tm_dev, &chip->adc_param);
 }
@@ -1397,7 +1430,11 @@ qpnp_chg_vbatdet_lo_irq_handler(int irq, void *_chip)
 	}
 	if (chip->bat_if_base) {
 		pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+		power_supply_changed(chip->batt_psy);
+#else
 		power_supply_changed(&chip->batt_psy);
+#endif
 	}
 	return IRQ_HANDLED;
 }
@@ -1704,7 +1741,11 @@ qpnp_chg_regulator_batfet_set(struct qpnp_chg_chip *chip, bool enable)
 	return rc;
 }
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+#define USB_WALL_THRESHOLD_MA	1500
+#else
 #define USB_WALL_THRESHOLD_MA	500
+#endif
 #define ENUM_T_STOP_BIT		BIT(0)
 #define USB_5V_UV	5000000
 #define USB_9V_UV	9000000
@@ -1717,12 +1758,32 @@ qpnp_chg_usb_usbin_valid_irq_handler(int irq, void *_chip)
 
 	usb_present = qpnp_chg_is_usb_chg_plugged_in(chip);
 	host_mode = qpnp_chg_is_otg_en_set(chip);
+#ifdef CONFIG_VENDOR_SMARTISAN
+	pr_debug("usbin-valid triggered: %d host_mode: %d chip->usb_present: %d\n",
+		usb_present, host_mode, chip->usb_present);
+#else
 	pr_debug("usbin-valid triggered: %d host_mode: %d\n",
 		usb_present, host_mode);
+#endif
 
 	/* In host mode notifications cmoe from USB supply */
 	if (host_mode)
 		return IRQ_HANDLED;
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+	if (last_usb_en != usb_present) {
+		if (usb_present)
+			atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_PLUGIN_EVENT, NULL);
+		else if (!qpnp_chg_is_dc_chg_plugged_in(chip))
+			atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_PLUGOUT_EVENT, NULL);
+		pr_info("usb_present changed: %d Notify EVENT\n", usb_present);
+	} else {
+		pr_info("usb_present status is not changed, not notify.\n");
+	}
+
+	pr_info("last_usb_en: %d cur_usb_en: %d\n", last_usb_en, usb_present);
+	last_usb_en = usb_present;
+#endif
 
 	if (chip->usb_present ^ usb_present) {
 		chip->aicl_settled = false;
@@ -1866,7 +1927,11 @@ qpnp_chg_bat_if_batt_temp_irq_handler(int irq, void *_chip)
 	}
 
 	pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+	power_supply_changed(chip->batt_psy);
+#else
 	power_supply_changed(&chip->batt_psy);
+#endif
 	return IRQ_HANDLED;
 }
 
@@ -1924,7 +1989,11 @@ qpnp_chg_bat_if_batt_pres_irq_handler(int irq, void *_chip)
 		}
 		chip->batt_present = batt_present;
 		pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+		power_supply_changed(chip->batt_psy);
+#else
 		power_supply_changed(&chip->batt_psy);
+#endif
 		pr_debug("psy changed usb_psy\n");
 		power_supply_changed(chip->usb_psy);
 
@@ -1950,6 +2019,21 @@ qpnp_chg_dc_dcin_valid_irq_handler(int irq, void *_chip)
 
 	dc_present = qpnp_chg_is_dc_chg_plugged_in(chip);
 	pr_debug("dcin-valid triggered: %d\n", dc_present);
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+	if (last_dcin_en != dc_present) {
+		if (dc_present)
+			atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_PLUGIN_EVENT, NULL);
+		else if (!qpnp_chg_is_usb_chg_plugged_in(chip))
+			atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_PLUGOUT_EVENT, NULL);
+		pr_debug("dc_present changed: %d Notify EVENT\n", dc_present);
+	} else {
+		pr_debug("dc_present status is not changed, not notify.\n");
+	}
+
+	pr_debug("last_dcin_en: %d cur_dcin_en: %d\n", last_dcin_en, dc_present);
+	last_dcin_en = dc_present;
+#endif
 
 	if (chip->dc_present ^ dc_present) {
 		chip->dc_present = dc_present;
@@ -1983,7 +2067,11 @@ qpnp_chg_dc_dcin_valid_irq_handler(int irq, void *_chip)
 		pr_debug("psy changed dc_psy\n");
 		power_supply_changed(&chip->dc_psy);
 		pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+		power_supply_changed(chip->batt_psy);
+#else
 		power_supply_changed(&chip->batt_psy);
+#endif
 		schedule_work(&chip->batfet_lcl_work);
 	}
 
@@ -2008,7 +2096,11 @@ qpnp_chg_chgr_chg_failed_irq_handler(int irq, void *_chip)
 
 	if (chip->bat_if_base) {
 		pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+		power_supply_changed(chip->batt_psy);
+#else
 		power_supply_changed(&chip->batt_psy);
+#endif
 	}
 	pr_debug("psy changed usb_psy\n");
 	power_supply_changed(chip->usb_psy);
@@ -2029,8 +2121,17 @@ qpnp_chg_chgr_chg_trklchg_irq_handler(int irq, void *_chip)
 	chip->chg_done = false;
 	if (chip->bat_if_base) {
 		pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+		power_supply_changed(chip->batt_psy);
+#else
 		power_supply_changed(&chip->batt_psy);
+#endif
 	}
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+	atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_TRKL_EVENT, NULL);
+	pr_info("%s: Begin charging, Notify CHARGE_TRKL_EVENT.\n", __func__);
+#endif
 
 	return IRQ_HANDLED;
 }
@@ -2088,7 +2189,11 @@ qpnp_chg_chgr_chg_fastchg_irq_handler(int irq, void *_chip)
 		chip->fastchg_on = fastchg_on;
 		if (chip->bat_if_base) {
 			pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+			power_supply_changed(chip->batt_psy);
+#else
 			power_supply_changed(&chip->batt_psy);
+#endif
 		}
 
 		pr_debug("psy changed usb_psy\n");
@@ -2102,6 +2207,10 @@ qpnp_chg_chgr_chg_fastchg_irq_handler(int irq, void *_chip)
 		if (fastchg_on) {
 			chip->chg_done = false;
 			bypass_vbatdet_comp(chip, 1);
+#ifdef CONFIG_VENDOR_SMARTISAN
+			atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_FAST_EVENT, NULL);
+			pr_info("Begin charging, Notify CHARGE_FAST_EVENT.\n");
+#endif
 			if (chip->bat_is_warm || chip->bat_is_cool) {
 				qpnp_chg_set_appropriate_vddmax(chip);
 				qpnp_chg_set_appropriate_battery_current(chip);
@@ -2342,13 +2451,41 @@ static enum power_supply_property msm_main_batt_power_props[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_OCV,
 };
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+static enum power_supply_property msm_backup_batt_power_props[] = {
+	POWER_SUPPLY_PROP_CHARGING_ENABLED,
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_HEALTH,
+	POWER_SUPPLY_PROP_ONLINE,
+	POWER_SUPPLY_PROP_TECHNOLOGY,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	POWER_SUPPLY_PROP_CURRENT_NOW,
+	POWER_SUPPLY_PROP_CAPACITY,
+	POWER_SUPPLY_PROP_PRESENT,
+	POWER_SUPPLY_PROP_TEMP,
+};
+#endif
+
 static char *pm_power_supplied_to[] = {
 	"battery",
+#ifdef CONFIG_VENDOR_SMARTISAN
+	"back_battery",
+#endif
 };
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+static char *pm_main_batt_supplied_to[] = {
+	"bms",
+};
+
+static char *pm_backup_batt_supplied_to[] = {
+	"stc3115",
+};
+#else
 static char *pm_batt_supplied_to[] = {
 	"bms",
 };
+#endif
 
 static int charger_monitor;
 module_param(charger_monitor, int, 0644);
@@ -2415,7 +2552,14 @@ get_prop_main_battery_voltage_now(struct qpnp_chg_chip *chip)
 		pr_err("vbat reading not supported for 1.0 rc=%d\n", rc);
 		return 0;
 	} else {
+#ifdef CONFIG_VENDOR_SMARTISAN
+		if (of_board_is_sfo_v40())
+			rc = qpnp_vadc_read(chip->vadc_dev, P_MUX2_1_3, &results);
+		else
+			rc = qpnp_vadc_read(chip->vadc_dev, VBAT_SNS, &results);
+#else
 		rc = qpnp_vadc_read(chip->vadc_dev, VBAT_SNS, &results);
+#endif
 		if (rc) {
 			pr_err("Unable to read main vbat rc=%d\n", rc);
 			return 0;
@@ -2423,6 +2567,38 @@ get_prop_main_battery_voltage_now(struct qpnp_chg_chip *chip)
 		return results.physical;
 	}
 }
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+get_prop_backup_battery_voltage_now(struct qpnp_chg_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+
+	if (!chip->stc3115_psy)
+		chip->stc3115_psy = power_supply_get_by_name("stc3115");
+
+	if (chip->stc3115_psy) {
+		chip->stc3115_psy->get_property(chip->stc3115_psy,
+			  POWER_SUPPLY_PROP_VOLTAGE_NOW, &ret);
+		return ret.intval;
+	}
+	pr_debug("stc3115 power supply is not registered\n");
+	return 0;
+}
+
+static int
+get_prop_battery_voltage_now(struct qpnp_chg_chip *chip)
+{
+	int batt_voltage;
+
+	if (!chip->current_batt)
+		batt_voltage = get_prop_backup_battery_voltage_now(chip);
+	else
+		batt_voltage = get_prop_main_battery_voltage_now(chip);
+
+	return batt_voltage;
+}
+#endif
 
 #define BATT_PRES_BIT BIT(7)
 static int
@@ -2439,6 +2615,40 @@ get_prop_main_batt_present(struct qpnp_chg_chip *chip)
 	};
 	return (batt_present & BATT_PRES_BIT) ? 1 : 0;
 }
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+get_prop_backup_batt_present(struct qpnp_chg_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+
+	if (!chip->stc3115_psy)
+		chip->stc3115_psy = power_supply_get_by_name("stc3115");
+
+	if (chip->stc3115_psy) {
+		chip->stc3115_psy->get_property(chip->stc3115_psy,
+			  POWER_SUPPLY_PROP_PRESENT, &ret);
+		return ret.intval;
+	}
+	pr_debug("stc3115 power supply is not registered\n");
+	return 0;
+}
+
+static int
+get_prop_batt_present(struct qpnp_chg_chip *chip)
+{
+	u8 batt_present;
+
+	if (get_prop_main_batt_present(chip) || get_prop_backup_batt_present(chip)) {
+		batt_present = 1;
+		pr_debug("main or backup battery at present.\n");
+	} else {
+		batt_present = 0;
+	}
+
+	return batt_present;
+}
+#endif
 
 #define BATT_TEMP_HOT	BIT(6)
 #define BATT_TEMP_OK	BIT(7)
@@ -2462,6 +2672,25 @@ get_prop_batt_health(struct qpnp_chg_chip *chip)
 	else
 		return POWER_SUPPLY_HEALTH_COLD;
 }
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+get_prop_backup_batt_health(struct qpnp_chg_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+
+	if (!chip->stc3115_psy)
+		chip->stc3115_psy = power_supply_get_by_name("stc3115");
+
+	if (chip->stc3115_psy) {
+		chip->stc3115_psy->get_property(chip->stc3115_psy,
+			  POWER_SUPPLY_PROP_HEALTH, &ret);
+		return ret.intval;
+	}
+	pr_debug("stc3115 power supply is not registered\n");
+	return 0;
+}
+#endif
 
 static int
 get_prop_charge_type(struct qpnp_chg_chip *chip)
@@ -2505,6 +2734,25 @@ get_main_batt_capacity(struct qpnp_chg_chip *chip)
 	return DEFAULT_CAPACITY;
 }
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+get_back_batt_capacity(struct qpnp_chg_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+
+	if (!chip->stc3115_psy)
+		chip->stc3115_psy = power_supply_get_by_name("stc3115");
+
+	if (chip->stc3115_psy) {
+		chip->stc3115_psy->get_property(chip->stc3115_psy,
+				  POWER_SUPPLY_PROP_CAPACITY, &ret);
+		return ret.intval;
+	}
+	pr_debug("stc3115 power supply is not registered\n");
+	return DEFAULT_CAPACITY;
+}
+#endif
+
 static int
 get_prop_main_batt_status(struct qpnp_chg_chip *chip)
 {
@@ -2542,6 +2790,41 @@ get_prop_main_batt_status(struct qpnp_chg_chip *chip)
 	return POWER_SUPPLY_STATUS_DISCHARGING;
 }
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+get_prop_backup_batt_status(struct qpnp_chg_chip *chip)
+{
+	int rc;
+	u8 chgr_sts, bat_if_sts;
+
+	rc = qpnp_chg_read(chip, &chgr_sts, INT_RT_STS(chip->chgr_base), 1);
+	if (rc) {
+		pr_err("failed to read interrupt sts %d\n", rc);
+		return POWER_SUPPLY_CHARGE_TYPE_NONE;
+	}
+
+	rc = qpnp_chg_read(chip, &bat_if_sts, INT_RT_STS(chip->bat_if_base), 1);
+	if (rc) {
+		pr_err("failed to read bat_if sts %d\n", rc);
+		return POWER_SUPPLY_CHARGE_TYPE_NONE;
+	}
+
+	if (chgr_sts & TRKL_CHG_ON_IRQ && bat_if_sts & BAT_FET_ON_IRQ && !chip->current_batt)
+		return POWER_SUPPLY_STATUS_CHARGING;
+	if (chgr_sts & FAST_CHG_ON_IRQ && bat_if_sts & BAT_FET_ON_IRQ && !chip->current_batt)
+		return POWER_SUPPLY_STATUS_CHARGING;
+
+	/* report full if state of charge is 100 and a charger is connected */
+	if ((qpnp_chg_is_usb_chg_plugged_in(chip) ||
+		qpnp_chg_is_dc_chg_plugged_in(chip))
+		&& (get_back_batt_capacity(chip) == 100)) {
+		return POWER_SUPPLY_STATUS_FULL;
+	}
+
+	return POWER_SUPPLY_STATUS_DISCHARGING;
+}
+#endif
+
 static int
 get_prop_main_current_now(struct qpnp_chg_chip *chip)
 {
@@ -2557,6 +2840,38 @@ get_prop_main_current_now(struct qpnp_chg_chip *chip)
 
 	return 0;
 }
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+get_prop_backup_current_now(struct qpnp_chg_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+
+	if (!chip->stc3115_psy)
+		chip->stc3115_psy = power_supply_get_by_name("stc3115");
+
+	if (chip->stc3115_psy) {
+		chip->stc3115_psy->get_property(chip->stc3115_psy,
+			  POWER_SUPPLY_PROP_CURRENT_NOW, &ret);
+		return ret.intval;
+	}
+	pr_debug("stc3115 power supply is not registered\n");
+	return 0;
+}
+
+static int
+get_prop_current_now(struct qpnp_chg_chip *chip)
+{
+	int batt_current;
+
+	if (!chip->current_batt)
+		batt_current = get_prop_backup_current_now(chip);
+	else
+		batt_current = get_prop_main_current_now(chip);
+
+	return batt_current;
+}
+#endif
 
 static int
 get_prop_main_full_design(struct qpnp_chg_chip *chip)
@@ -2643,6 +2958,38 @@ get_prop_main_capacity(struct qpnp_chg_chip *chip)
 	return DEFAULT_CAPACITY;
 }
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+get_prop_backup_capacity(struct qpnp_chg_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+
+	if (!chip->stc3115_psy)
+		chip->stc3115_psy = power_supply_get_by_name("stc3115");
+
+	if (chip->stc3115_psy) {
+		chip->stc3115_psy->get_property(chip->stc3115_psy,
+				  POWER_SUPPLY_PROP_CAPACITY, &ret);
+		return ret.intval;
+	}
+	pr_debug("stc3115 power supply is not registered\n");
+	return DEFAULT_CAPACITY;
+}
+
+static int
+get_prop_capacity(struct qpnp_chg_chip *chip)
+{
+	int soc;
+
+	if (!chip->current_batt)
+		soc = get_prop_backup_capacity(chip);
+	else
+		soc = get_prop_main_capacity(chip);
+
+	return soc;
+}
+#endif
+
 #define DEFAULT_TEMP		250
 #define MAX_TOLERABLE_BATT_TEMP_DDC	680
 static int
@@ -2664,6 +3011,41 @@ get_prop_main_batt_temp(struct qpnp_chg_chip *chip)
 
 	return (int)results.physical;
 }
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+get_prop_backup_batt_temp(struct qpnp_chg_chip *chip)
+{
+	int rc = 0;
+	struct qpnp_vadc_result results;
+
+	if (chip->use_default_batt_values /*|| !get_prop_backup_batt_present(chip)*/)
+		return DEFAULT_TEMP;
+
+	rc = qpnp_vadc_read(chip->vadc_dev, LR_MUX5_PU1_AMUX_THM2, &results);
+	if (rc) {
+		pr_debug("Unable to read backup batt temperature rc=%d\n", rc);
+		return 0;
+	}
+	pr_debug("get_backup_batt_temp %d %lld\n",
+		results.adc_code, results.physical);
+
+	return (int)results.physical;
+}
+
+static int
+get_prop_batt_temp(struct qpnp_chg_chip *chip)
+{
+	int temp;
+
+	if (!chip->current_batt)
+		temp = get_prop_backup_batt_temp(chip);
+	else
+		temp = get_prop_main_batt_temp(chip);
+
+	return temp;
+}
+#endif
 
 static int get_prop_cycle_count(struct qpnp_chg_chip *chip)
 {
@@ -2696,6 +3078,24 @@ static int get_prop_main_online(struct qpnp_chg_chip *chip)
 {
 	return qpnp_chg_is_batfet_closed(chip);
 }
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int get_prop_backup_online(struct qpnp_chg_chip *chip)
+{
+	union power_supply_propval ret = {0,};
+
+	if (!chip->stc3115_psy)
+		chip->stc3115_psy = power_supply_get_by_name("stc3115");
+
+	if (chip->stc3115_psy) {
+		chip->stc3115_psy->get_property(chip->stc3115_psy,
+				  POWER_SUPPLY_PROP_ONLINE, &ret);
+		return ret.intval;
+	}
+	pr_debug("stc3115 power supply is not registered\n");
+	return 0;
+}
+#endif
 
 static void
 qpnp_main_batt_external_power_changed(struct power_supply *psy)
@@ -2772,6 +3172,86 @@ skip_set_iusb_max:
 	pr_debug("psy changed main_batt_psy\n");
 	power_supply_changed(&chip->main_batt_psy);
 }
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+static void
+qpnp_backup_batt_external_power_changed(struct power_supply *psy)
+{
+	struct qpnp_chg_chip *chip = container_of(psy, struct qpnp_chg_chip,
+								backup_batt_psy);
+	union power_supply_propval ret = {0,};
+
+	pr_debug("qpnp_backup_batt_external_power_changed.\n");
+
+	if (!chip->stc3115_psy)
+		chip->stc3115_psy = power_supply_get_by_name("stc3115");
+
+	chip->usb_psy->get_property(chip->usb_psy,
+			  POWER_SUPPLY_PROP_ONLINE, &ret);
+
+	/* Only honour requests while USB is present */
+	if (qpnp_chg_is_usb_chg_plugged_in(chip)) {
+		chip->usb_psy->get_property(chip->usb_psy,
+			  POWER_SUPPLY_PROP_CURRENT_MAX, &ret);
+
+		if (chip->prev_usb_max_ma == ret.intval)
+			goto skip_set_iusb_max;
+
+		chip->prev_usb_max_ma = ret.intval;
+
+		if (ret.intval <= 2 && !chip->use_default_batt_values &&
+						get_prop_batt_present(chip)) {
+			if (ret.intval ==  2)
+				qpnp_chg_usb_suspend_enable(chip, 1);
+			qpnp_chg_iusbmax_set(chip, QPNP_CHG_I_MAX_MIN_100);
+		} else {
+			qpnp_chg_usb_suspend_enable(chip, 0);
+			if (qpnp_is_dc_higher_prio(chip)
+				&& qpnp_chg_is_dc_chg_plugged_in(chip)) {
+					pr_debug("dc has higher priority\n");
+					qpnp_chg_iusbmax_set(chip,
+							QPNP_CHG_I_MAX_MIN_100);
+			} else if (((ret.intval / 1000) > USB_WALL_THRESHOLD_MA)
+					&& (charger_monitor ||
+					!chip->charger_monitor_checked)) {
+					if (!qpnp_is_dc_higher_prio(chip))
+						qpnp_chg_idcmax_set(chip,
+							QPNP_CHG_I_MAX_MIN_100);
+					if (unlikely(ext_ovp_present)) {
+						qpnp_chg_iusbmax_set(chip,
+							OVP_USB_WALL_TRSH_MA);
+					} else if (unlikely(
+							ext_ovp_isns_present)) {
+						qpnp_chg_iusb_trim_set(chip,
+							chip->usb_trim_default);
+						qpnp_chg_iusbmax_set(chip,
+							IOVP_USB_WALL_TRSH_MA);
+					} else {
+						qpnp_chg_iusbmax_set(chip,
+							USB_WALL_THRESHOLD_MA);
+					}
+			} else {
+				qpnp_chg_iusbmax_set(chip, ret.intval / 1000);
+			}
+
+			if ((chip->flags & POWER_STAGE_WA)
+			&& ((ret.intval / 1000) > USB_WALL_THRESHOLD_MA)
+			&& !chip->power_stage_workaround_running
+			&& chip->power_stage_workaround_enable) {
+				chip->power_stage_workaround_running = true;
+				pr_debug("usb wall chg inserted starting power stage workaround charger_monitor = %d\n",
+						charger_monitor);
+				schedule_work(&chip->reduce_power_stage_work);
+			}
+		}
+	}
+
+skip_set_iusb_max:
+	pr_debug("end of power supply changed\n");
+	pr_debug("psy changed backup_batt_psy\n");
+	power_supply_changed(&chip->backup_batt_psy);
+}
+#endif
 
 static int
 qpnp_main_batt_power_get_property(struct power_supply *psy,
@@ -2867,6 +3347,54 @@ qpnp_main_batt_power_get_property(struct power_supply *psy,
 
 	return 0;
 }
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+static int
+qpnp_backup_batt_power_get_property(struct power_supply *psy,
+				       enum power_supply_property psp,
+				       union power_supply_propval *val)
+{
+	struct qpnp_chg_chip *chip = container_of(psy, struct qpnp_chg_chip,
+								backup_batt_psy);
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_STATUS:
+		val->intval = get_prop_backup_batt_status(chip);
+		break;
+	case POWER_SUPPLY_PROP_HEALTH:
+		val->intval = get_prop_backup_batt_health(chip);
+		break;
+	case POWER_SUPPLY_PROP_PRESENT:
+		val->intval = get_prop_backup_batt_present(chip);
+		break;
+	case POWER_SUPPLY_PROP_TECHNOLOGY:
+		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		val->intval = get_prop_backup_battery_voltage_now(chip);
+		break;
+	case POWER_SUPPLY_PROP_TEMP:
+		val->intval = get_prop_backup_batt_temp(chip);
+		break;
+	case POWER_SUPPLY_PROP_CAPACITY:
+		val->intval = get_prop_backup_capacity(chip);
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_NOW:
+		val->intval = get_prop_backup_current_now(chip);
+		break;
+	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
+		val->intval = !(chip->charging_disabled);
+		break;
+	case POWER_SUPPLY_PROP_ONLINE:
+		val->intval = get_prop_backup_online(chip);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+#endif
 
 #define BTC_CONFIG_ENABLED	BIT(7)
 #define BTC_COLD		BIT(1)
@@ -3435,7 +3963,11 @@ qpnp_chg_regulator_boost_enable(struct regulator_dev *rdev)
 			|| (get_main_batt_capacity(chip) == 100)
 			|| (get_prop_main_batt_status(chip) ==
 			POWER_SUPPLY_STATUS_FULL)))
+#ifdef CONFIG_VENDOR_SMARTISAN
+		power_supply_changed(chip->batt_psy);
+#else
 		power_supply_changed(&chip->batt_psy);
+#endif
 
 	return rc;
 }
@@ -3540,7 +4072,11 @@ qpnp_chg_regulator_boost_disable(struct regulator_dev *rdev)
 			chip->resuming_charging = true;
 			qpnp_chg_set_appropriate_vbatdet(chip);
 		} else if (chip->chg_done) {
+#ifdef CONFIG_VENDOR_SMARTISAN
+			power_supply_changed(chip->batt_psy);
+#else
 			power_supply_changed(&chip->batt_psy);
+#endif
 		}
 	}
 
@@ -3735,7 +4271,11 @@ qpnp_chg_adjust_vddmax(struct qpnp_chg_chip *chip, int vbat_mv)
 	qpnp_chg_set_appropriate_vddmax(chip);
 }
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+#define CONSECUTIVE_COUNT	5
+#else
 #define CONSECUTIVE_COUNT	3
+#endif
 #define VBATDET_MAX_ERR_MV	50
 static void
 qpnp_eoc_work(struct work_struct *work)
@@ -3748,6 +4288,10 @@ qpnp_eoc_work(struct work_struct *work)
 	int ibat_ma, vbat_mv, rc = 0;
 	u8 batt_sts = 0, buck_sts = 0, chg_sts = 0;
 	bool vbat_lower_than_vbatdet;
+#ifdef CONFIG_VENDOR_SMARTISAN
+	bool is_main_bat_used = current_used_batt;
+	static int main_count = 0, back_count = 0;
+#endif
 
 	pm_stay_awake(chip->dev);
 	qpnp_chg_charge_en(chip, !chip->charging_disabled);
@@ -3823,8 +4367,17 @@ qpnp_eoc_work(struct work_struct *work)
 		} else {
 			if (count == CONSECUTIVE_COUNT) {
 				if (!chip->bat_is_cool && !chip->bat_is_warm) {
+#ifdef CONFIG_VENDOR_SMARTISAN
+					pr_info("%s Battery %d End of Charging!\n", __func__, is_main_bat_used);
+					if (is_main_bat_used) {
+						chip->chg_done = true;
+						atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_DONE_EVENT, NULL);
+						pr_info("Notify Main Battery CHARGE_DONE_EVENT.\n");
+					}
+#else
 					pr_info("End of Charging\n");
 					chip->chg_done = true;
+#endif
 				} else {
 					pr_info("stop charging: battery is %s, vddmax = %d reached\n",
 						chip->bat_is_cool
@@ -3837,8 +4390,20 @@ qpnp_eoc_work(struct work_struct *work)
 				qpnp_chg_charge_en(chip,
 						!chip->charging_disabled);
 				pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+				power_supply_changed(chip->batt_psy);
+#else
 				power_supply_changed(&chip->batt_psy);
+#endif
 				qpnp_chg_enable_irq(&chip->chg_vbatdet_lo);
+#ifdef CONFIG_VENDOR_SMARTISAN
+				pr_info("%s is_main_bat_used=%d current_used_batt=%d\n",
+							__func__, is_main_bat_used, current_used_batt);
+				if (is_main_bat_used && get_prop_backup_batt_present(chip)) {
+					count = 0;
+					goto check_again_later;
+				}
+#endif
 				goto stop_eoc;
 			} else {
 				count += 1;
@@ -3846,7 +4411,39 @@ qpnp_eoc_work(struct work_struct *work)
 			}
 		}
 	} else {
+#ifdef CONFIG_VENDOR_SMARTISAN
+		if (is_main_bat_used) {
+			if (get_main_batt_capacity(chip) >= 100) {
+				if (!chip->chg_done) {
+					chip->chg_done = true;
+					atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_DONE_EVENT, NULL);
+					pr_info("%s main battery notify event CHARGE_DONE_EVENT.\n", __func__);
+				}
+				if (get_prop_backup_batt_present(chip)) {
+					pr_info("%s not charging: back battery is on, continue eoc_work.\n", __func__);
+					goto check_again_later;
+				} else {
+					pr_info("%s not charging: back battery is off, stop eoc_work.\n", __func__);
+					goto stop_eoc;
+				}
+			}
+			main_count++;
+			back_count = 0;
+		} else {
+			main_count = 0;
+			back_count++;
+		}
+
+		qpnp_chg_force_run_on_batt(chip, 1);
+		msleep(2000);
+		qpnp_chg_force_run_on_batt(chip, chip->charging_disabled);
+
+		pr_info("%s: not charging: main_count=%d back_count=%d\n", __func__, main_count, back_count);
+		if (main_count < CONSECUTIVE_COUNT && back_count < CONSECUTIVE_COUNT)
+			goto check_again_later;
+#else
 		pr_debug("not charging\n");
+#endif
 		goto stop_eoc;
 	}
 
@@ -3858,6 +4455,10 @@ check_again_later:
 stop_eoc:
 	vbat_low_count = 0;
 	count = 0;
+#ifdef CONFIG_VENDOR_SMARTISAN
+	main_count = 0;
+	back_count = 0;
+#endif
 	pm_relax(chip->dev);
 }
 
@@ -3884,7 +4485,11 @@ qpnp_chg_insertion_ocv_work(struct work_struct *work)
 			bat_if_sts, charge_en, chip->insertion_ocv_uv);
 	qpnp_chg_charge_en(chip, !chip->charging_disabled);
 	pr_debug("psy changed batt_psy\n");
+#ifdef CONFIG_VENDOR_SMARTISAN
+	power_supply_changed(chip->batt_psy);
+#else
 	power_supply_changed(&chip->batt_psy);
+#endif
 }
 
 static void
@@ -3991,6 +4596,13 @@ qpnp_chg_adc_notification(enum qpnp_tm_state state, void *ctx)
 	pr_debug("warm %d, cool %d, low = %d deciDegC, high = %d deciDegC\n",
 			chip->bat_is_warm, chip->bat_is_cool,
 			chip->adc_param.low_temp, chip->adc_param.high_temp);
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+	if (!chip->current_batt)
+		chip->adc_param.channel = LR_MUX5_PU1_AMUX_THM2;
+	else
+		chip->adc_param.channel = LR_MUX1_BATT_THERM;
+#endif
 
 	if (qpnp_adc_tm_channel_measure(chip->adc_tm_dev, &chip->adc_param))
 		pr_err("request ADC error\n");
@@ -4319,7 +4931,9 @@ qpnp_main_batt_power_set_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
 		chip->fake_battery_soc = val->intval;
+#ifndef CONFIG_VENDOR_SMARTISAN
 		power_supply_changed(&chip->batt_psy);
+#endif
 		break;
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		chip->charging_disabled = !(val->intval);
@@ -4328,11 +4942,17 @@ qpnp_main_batt_power_set_property(struct power_supply *psy,
 			qpnp_chg_charge_en(chip, !chip->charging_disabled);
 			qpnp_chg_force_run_on_batt(chip,
 						chip->charging_disabled);
+#ifdef CONFIG_VENDOR_SMARTISAN
+			atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_PLUGOUT_EVENT, NULL);
+#endif
 		} else {
 			/* enable charging */
 			qpnp_chg_force_run_on_batt(chip,
 					chip->charging_disabled);
 			qpnp_chg_charge_en(chip, !chip->charging_disabled);
+#ifdef CONFIG_VENDOR_SMARTISAN
+			atomic_notifier_call_chain(&batt_state_chg_notifier_list, CHARGE_PLUGIN_EVENT, NULL);
+#endif
 		}
 		break;
 	case POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL:
@@ -5099,6 +5719,9 @@ qpnp_charger_read_dt_props(struct qpnp_chg_chip *chip)
 	OF_PROP_READ(chip, soc_resume_limit, "resume-soc", rc, 1);
 	OF_PROP_READ(chip, batt_weak_voltage_mv, "vbatweak-mv", rc, 1);
 	OF_PROP_READ(chip, vbatdet_max_err_mv, "vbatdet-maxerr-mv", rc, 1);
+#ifdef CONFIG_VENDOR_SMARTISAN
+	OF_PROP_READ(chip, current_batt, "charge-batt", rc, 1);
+#endif
 
 	if (rc)
 		return rc;
@@ -5218,6 +5841,49 @@ qpnp_charger_read_dt_props(struct qpnp_chg_chip *chip)
 
 	return rc;
 }
+
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+/* parse_switch_block() is called by the battery switch handler.
+ * As soon as a battery switch occurs, our tasklets above will not be
+ * executed any longer. This function then switch the
+ * charge battery path
+ */
+static int parse_switch_block(struct notifier_block *this,
+		unsigned long event, void *ptr)
+{
+	struct qpnp_chg_chip *chip = container_of(this,
+		struct qpnp_chg_chip, parse_switch_blk);
+
+	if (ptr == NULL) {
+		pr_err("parse_switch_event couldn't get any message.\n");
+		return NOTIFY_BAD;
+	}
+
+	if (!strncmp(ptr, "on", 2)) {
+		chip->current_batt = 0;
+		chip->batt_psy = &chip->backup_batt_psy;
+		pr_info("Switch to use backup battery.\n");
+	} else if (!strncmp(ptr, "off", 3)) {
+		chip->current_batt = 1;
+		chip->batt_psy = &chip->main_batt_psy;
+		pr_info("Switch to use main battery.\n");
+	} else if (!strncmp(ptr, "back-bat-on", 11)) {
+		if (!chip->chg_done) {
+			// Schedule eoc_work to check main battery charge-done status.
+			schedule_delayed_work(&chip->eoc_work, 0);
+			pr_info("Back battery gets on, schedule eoc_work.\n");
+		}
+	} else {
+		pr_err("Invalid switch message, do not switch.\n");
+	}
+
+	current_used_batt = chip->current_batt;
+	power_supply_changed(chip->batt_psy);
+
+	return NOTIFY_DONE;
+}
+#endif
 
 static int __devinit
 qpnp_charger_probe(struct spmi_device *spmi)
@@ -5484,6 +6150,39 @@ qpnp_charger_probe(struct spmi_device *spmi)
 			qpnp_bat_if_adc_disable_work);
 	}
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+	/* Creat backup battery power supply */
+	chip->backup_batt_psy.name = "back_battery";
+	chip->backup_batt_psy.type = POWER_SUPPLY_TYPE_BACK_BATTERY;
+	chip->backup_batt_psy.properties = msm_backup_batt_power_props;
+	chip->backup_batt_psy.num_properties =
+			ARRAY_SIZE(msm_backup_batt_power_props);
+	chip->backup_batt_psy.get_property = qpnp_backup_batt_power_get_property;
+	chip->backup_batt_psy.external_power_changed =
+			qpnp_backup_batt_external_power_changed;
+	chip->backup_batt_psy.supplied_to = pm_backup_batt_supplied_to;
+	chip->backup_batt_psy.num_supplicants =
+			ARRAY_SIZE(pm_backup_batt_supplied_to);
+
+	rc = power_supply_register(chip->dev, &chip->backup_batt_psy);
+	if (rc < 0) {
+		pr_err("backup batt failed to register rc = %d\n", rc);
+		goto fail_chg_enable;
+	}
+#endif
+
+#ifdef CONFIG_VENDOR_SMARTISAN
+	/* Init batt power supply for current charging battery */
+	chip->batt_psy = &chip->main_batt_psy;
+
+	/* Register a call for battery switch conditions. */
+	memset((void *)&chip->parse_switch_blk, 0,
+			sizeof(struct notifier_block));
+	chip->parse_switch_blk.notifier_call  = parse_switch_block;
+	atomic_notifier_chain_register(&switch_notifier_list,
+			&chip->parse_switch_blk);
+#endif
+
 	INIT_DELAYED_WORK(&chip->eoc_work, qpnp_eoc_work);
 	INIT_DELAYED_WORK(&chip->arb_stop_work, qpnp_arb_stop_work);
 	INIT_DELAYED_WORK(&chip->usbin_health_check,
@@ -5596,8 +6295,12 @@ unregister_dc_psy:
 	if (chip->dc_chgpth_base)
 		power_supply_unregister(&chip->dc_psy);
 unregister_batt:
-	if (chip->bat_if_base)
+	if (chip->bat_if_base) {
 		power_supply_unregister(&chip->main_batt_psy);
+#ifdef CONFIG_VENDOR_SMARTISAN
+		power_supply_unregister(&chip->backup_batt_psy);
+#endif
+	}
 fail_chg_enable:
 	regulator_unregister(chip->otg_vreg.rdev);
 	regulator_unregister(chip->boost_vreg.rdev);
@@ -5623,6 +6326,9 @@ qpnp_charger_remove(struct spmi_device *spmi)
 	cancel_work_sync(&chip->adc_disable_work);
 	cancel_work_sync(&chip->adc_measure_work);
 	power_supply_unregister(&chip->main_batt_psy);
+#ifdef CONFIG_VENDOR_SMARTISAN
+	power_supply_unregister(&chip->backup_batt_psy);
+#endif
 	cancel_work_sync(&chip->batfet_lcl_work);
 	cancel_work_sync(&chip->insertion_ocv_work);
 	cancel_work_sync(&chip->reduce_power_stage_work);
@@ -5637,6 +6343,7 @@ qpnp_charger_remove(struct spmi_device *spmi)
 	return 0;
 }
 
+#ifndef CONFIG_VENDOR_SMARTISAN
 static int qpnp_chg_resume(struct device *dev)
 {
 	struct qpnp_chg_chip *chip = dev_get_drvdata(dev);
@@ -5670,10 +6377,16 @@ static int qpnp_chg_suspend(struct device *dev)
 
 	return rc;
 }
+#endif
 
 static const struct dev_pm_ops qpnp_chg_pm_ops = {
+#ifdef CONFIG_VENDOR_SMARTISAN
+	.resume		= NULL,
+	.suspend	= NULL,
+#else
 	.resume		= qpnp_chg_resume,
 	.suspend	= qpnp_chg_suspend,
+#endif
 };
 
 static struct spmi_driver qpnp_charger_driver = {
