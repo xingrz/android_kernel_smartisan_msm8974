@@ -57,7 +57,7 @@
 #define WLAN_HO_CFG_FILE           "wlan/wlan_ho_config"
 #endif // MSM_PLATFORM
 
-#define WLAN_MAC_FILE              "wlan/prima/wlan_mac.bin"
+#define WLAN_MAC_FILE              "wlan/prima/wifi_mac_nv.bin"
 
 VOS_STATUS hdd_request_firmware(char *pfileName,v_VOID_t *pCtx,v_VOID_t **ppfw_data, v_SIZE_t *pSize);
 
