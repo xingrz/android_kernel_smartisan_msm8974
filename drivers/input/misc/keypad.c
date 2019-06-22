@@ -28,7 +28,7 @@ struct keypad_button_data {
 
 static int keypad_open(struct inode *inode, struct file *file)
 {
-	struct keypad_button_data *bdata = PDE_DATA(inode);
+	struct keypad_button_data *bdata = PDE(inode)->data;
 	file->private_data = bdata;
 	return nonseekable_open(inode, file);
 }
